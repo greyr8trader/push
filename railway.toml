@@ -1,0 +1,8 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "pip install -r requirements.txt && bash build.sh"
+
+[deploy]
+startCommand = "python match_trader_grpc_bridge.py"
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 10

@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Generated gRPC stubs — regenerated on Railway build via build.sh
+# (Comment these out if you prefer to commit the stubs)
+broker_api_pb2.py
+broker_api_pb2_grpc.py
+
+# OS
+.DS_Store
