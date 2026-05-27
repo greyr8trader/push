@@ -117,7 +117,7 @@ def build_channel(cfg: Config) -> grpc.aio.Channel:
 
 def position_to_payload(login: str, pos: pb.PBPositionWithGroup) -> dict:
     return {
-        "event": "position_opened",
+        "event": "position_opened" if pos.request_update_type == pb.NEW else "position_closed",
         "login": login,
         "group": pos.group,
         "position_id": pos.id,
@@ -161,14 +161,15 @@ async def consume_stream(cfg: Config, http: httpx.AsyncClient) -> None:
             for login, pos in positions.items():
                 if login not in cfg.watchlist:
                     continue
-                if pos.request_update_type != pb.NEW:
+                if pos.request_update_type not in (pb.NEW, pb.CLOSED):
                     continue
 
                 payload = position_to_payload(login, pos)
-                log.info(
-                    "NEW position login=%s symbol=%s side=%s vol=%s @ %s",
-                    login, pos.symbol, payload["side"], pos.volume, pos.open_price,
-                )
+ log.info(
+    "%s login=%s id=%s symbol=%s side=%s vol=%s @ %s profit=%s",
+    payload["event"], login, pos.id, pos.symbol, payload["side"],
+    pos.volume, pos.open_price, pos.net_profit,
+)
                 asyncio.create_task(post_to_n8n(http, cfg, payload))
 
 
