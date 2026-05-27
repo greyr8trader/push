@@ -2,8 +2,8 @@
 Match-Trader gRPC -> n8n webhook bridge.
 
 Watches PositionsServiceExternal.getOpenPositionsStreamByGroupsOrLogins for a
-fixed login watchlist, filters to request_update_type == NEW (newly opened
-positions), and POSTs each event to an n8n webhook for Telegram delivery.
+fixed login watchlist, filters to request_update_type in (NEW, CLOSED), and
+POSTs each event to an n8n webhook for Telegram delivery.
 
 Deploy as a long-running Railway worker.
 
@@ -130,6 +130,9 @@ def position_to_payload(login: str, pos: pb.PBPositionWithGroup) -> dict:
         "stop_loss": pos.stop_loss or None,
         "take_profit": pos.take_profit or None,
         "commission": pos.commission,
+        "profit": pos.profit,
+        "net_profit": pos.net_profit,
+        "current_price": pos.current_price,
         "received_at": int(time.time()),
     }
 
@@ -165,11 +168,11 @@ async def consume_stream(cfg: Config, http: httpx.AsyncClient) -> None:
                     continue
 
                 payload = position_to_payload(login, pos)
- log.info(
-    "%s login=%s id=%s symbol=%s side=%s vol=%s @ %s profit=%s",
-    payload["event"], login, pos.id, pos.symbol, payload["side"],
-    pos.volume, pos.open_price, pos.net_profit,
-)
+                log.info(
+                    "%s login=%s id=%s symbol=%s side=%s vol=%s @ %s profit=%s",
+                    payload["event"], login, pos.id, pos.symbol, payload["side"],
+                    pos.volume, pos.open_price, pos.net_profit,
+                )
                 asyncio.create_task(post_to_n8n(http, cfg, payload))
 
 
