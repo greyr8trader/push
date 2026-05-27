@@ -3,19 +3,18 @@ Match-Trader gRPC -> n8n webhook bridge.
 
 Watches PositionsServiceExternal.getOpenPositionsStreamByGroupsOrLogins for a
 fixed login watchlist, filters to request_update_type in (NEW, CLOSED), and
-POSTs each event to an n8n webhook for Telegram delivery.
-
-Deploy as a long-running Railway worker.
+POSTs each event to its respective n8n webhook (separate URLs for opens vs closes).
 
 Env vars:
-  MT_GRPC_HOST          grpc-broker-api-demo.match-trader.com:443
-  MT_GRPC_USE_TLS       "true" / "false" (default true)
-  MT_SYSTEM_UUID        broker system UUID
-  MT_AUTH_TOKEN         bearer token from Match-Trader CRM
-  MT_WATCHLIST_LOGINS   comma-separated logins, e.g. "333376259,1005,12345"
-  N8N_WEBHOOK_URL       n8n webhook to POST NEW position events to
-  N8N_WEBHOOK_TOKEN     shared secret sent as X-Bridge-Token (optional)
-  PING_LOG_EVERY_S      log a liveness line every N seconds (default 300)
+  MT_GRPC_HOST            grpc-broker-api-demo.match-trader.com:443
+  MT_GRPC_USE_TLS         "true" / "false" (default true)
+  MT_SYSTEM_UUID          broker system UUID
+  MT_AUTH_TOKEN           bearer token from Match-Trader CRM
+  MT_WATCHLIST_LOGINS     comma-separated logins, e.g. "333376259,1005,12345"
+  N8N_WEBHOOK_OPEN_URL    webhook URL for NEW (position opened) events
+  N8N_WEBHOOK_CLOSE_URL   webhook URL for CLOSED (position closed) events
+  N8N_WEBHOOK_TOKEN       shared secret sent as X-Bridge-Token (optional)
+  PING_LOG_EVERY_S        log a liveness line every N seconds (default 300)
 """
 
 from __future__ import annotations
@@ -42,7 +41,8 @@ class Config:
     system_uuid: str
     auth_token: str
     watchlist: frozenset[str]
-    webhook_url: str
+    webhook_open_url: str
+    webhook_close_url: str
     webhook_token: str | None
     ping_log_every_s: int
 
@@ -60,7 +60,8 @@ class Config:
             system_uuid=os.environ["MT_SYSTEM_UUID"],
             auth_token=os.environ["MT_AUTH_TOKEN"],
             watchlist=watchlist,
-            webhook_url=os.environ["N8N_WEBHOOK_URL"],
+            webhook_open_url=os.environ["N8N_WEBHOOK_OPEN_URL"],
+            webhook_close_url=os.environ["N8N_WEBHOOK_CLOSE_URL"],
             webhook_token=os.environ.get("N8N_WEBHOOK_TOKEN"),
             ping_log_every_s=int(os.environ.get("PING_LOG_EVERY_S", "300")),
         )
@@ -77,9 +78,11 @@ log = logging.getLogger("mt-bridge")
 
 # ---------- Webhook delivery ----------
 
-async def post_to_n8n(client: httpx.AsyncClient, cfg: Config, payload: dict) -> None:
-    """POST to n8n with bounded retry. Fire-and-forget so a slow webhook can't
-    stall the gRPC stream."""
+async def post_to_n8n(
+    client: httpx.AsyncClient, cfg: Config, url: str, payload: dict
+) -> None:
+    """POST to the chosen webhook with bounded retry. Fire-and-forget so a slow
+    webhook can't stall the gRPC stream."""
     headers = {"Content-Type": "application/json"}
     if cfg.webhook_token:
         headers["X-Bridge-Token"] = cfg.webhook_token
@@ -87,7 +90,7 @@ async def post_to_n8n(client: httpx.AsyncClient, cfg: Config, payload: dict) -> 
     backoff = 1.0
     for attempt in range(4):
         try:
-            r = await client.post(cfg.webhook_url, json=payload, headers=headers, timeout=10.0)
+            r = await client.post(url, json=payload, headers=headers, timeout=10.0)
             r.raise_for_status()
             return
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
@@ -168,12 +171,17 @@ async def consume_stream(cfg: Config, http: httpx.AsyncClient) -> None:
                     continue
 
                 payload = position_to_payload(login, pos)
+                url = (
+                    cfg.webhook_open_url
+                    if payload["event"] == "position_opened"
+                    else cfg.webhook_close_url
+                )
                 log.info(
                     "%s login=%s id=%s symbol=%s side=%s vol=%s @ %s profit=%s",
                     payload["event"], login, pos.id, pos.symbol, payload["side"],
                     pos.volume, pos.open_price, pos.net_profit,
                 )
-                asyncio.create_task(post_to_n8n(http, cfg, payload))
+                asyncio.create_task(post_to_n8n(http, cfg, url, payload))
 
 
 async def run_forever(cfg: Config) -> None:
